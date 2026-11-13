@@ -4,3 +4,6 @@ build/
 *.iml
 .kotlin/
 .DS_Store
+
+# what a run writes
+workspace/results/
