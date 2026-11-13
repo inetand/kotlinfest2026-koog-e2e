@@ -1,0 +1,9 @@
+#!/bin/sh
+# Builds the jar on first use (or when sources changed) and runs the CLI: ./harness run, ./harness doctor, ...
+set -e
+cd "$(dirname "$0")"
+jar=build/libs/harness.jar
+if [ ! -f "$jar" ] || [ -n "$(find src build.gradle.kts -newer "$jar" -print -quit)" ]; then
+    ./gradlew -q bootJar
+fi
+exec java -jar "$jar" "$@"
