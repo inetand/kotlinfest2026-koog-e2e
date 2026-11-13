@@ -1,0 +1,43 @@
+{
+  "specId": "create-note",
+  "specHash": "f1fb7836ad55970d",
+  "appId": "com.example.notes",
+  "steps": [
+    {
+      "type": "launch",
+      "clearState": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "fab_add_note"
+      }
+    },
+    {
+      "type": "inputText",
+      "text": "Groceries"
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Save"
+      }
+    },
+    {
+      "type": "waitForAnimation"
+    },
+    {
+      "type": "screenshot",
+      "name": "01_saved"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "01_saved",
+      "criterionIds": [
+        "note-saved",
+        "title-kept"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "behavior": "FAILS_ONCE",
+  "screens": {
+    "01_synced": "status: Up to date\nlast sync: just now"
+  }
+}

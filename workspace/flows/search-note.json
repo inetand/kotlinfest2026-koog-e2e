@@ -1,0 +1,33 @@
+{
+  "specId": "search-note",
+  "specHash": "4f2b9183784d87b4",
+  "appId": "com.example.notes",
+  "steps": [
+    {
+      "type": "launch",
+      "clearState": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "action_search"
+      }
+    },
+    {
+      "type": "inputText",
+      "text": "Groc"
+    },
+    {
+      "type": "screenshot",
+      "name": "01_results"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "01_results",
+      "criterionIds": [
+        "result-listed"
+      ]
+    }
+  ]
+}

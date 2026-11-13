@@ -1,0 +1,6 @@
+{
+  "behavior": "ALWAYS_FAILS",
+  "screens": {
+    "01_deleted": "snackbar: Note deleted"
+  }
+}

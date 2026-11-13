@@ -1,0 +1,6 @@
+{
+  "behavior": "SUCCEEDS",
+  "screens": {
+    "01_saved": "toolbar: Groceries\nsnackbar: Note saved\nbutton: Back"
+  }
+}

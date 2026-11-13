@@ -1,0 +1,41 @@
+{
+  "specId": "delete-note",
+  "specHash": "28c11655f0719f86",
+  "appId": "com.example.notes",
+  "steps": [
+    {
+      "type": "launch",
+      "clearState": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Groceries"
+      }
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "action_delete"
+      }
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Delete"
+      }
+    },
+    {
+      "type": "screenshot",
+      "name": "01_deleted"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "01_deleted",
+      "criterionIds": [
+        "note-removed"
+      ]
+    }
+  ]
+}

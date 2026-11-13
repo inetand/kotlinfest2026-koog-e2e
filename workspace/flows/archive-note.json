@@ -1,0 +1,44 @@
+{
+  "specId": "archive-note",
+  "specHash": "0000000000000000",
+  "appId": "com.example.notes",
+  "steps": [
+    {
+      "type": "launch",
+      "clearState": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Groceries"
+      }
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "action_archive"
+      }
+    },
+    {
+      "type": "back"
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "nav_archive"
+      }
+    },
+    {
+      "type": "screenshot",
+      "name": "01_archive"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "01_archive",
+      "criterionIds": [
+        "note-archived"
+      ]
+    }
+  ]
+}

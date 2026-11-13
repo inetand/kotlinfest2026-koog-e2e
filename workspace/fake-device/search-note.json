@@ -1,0 +1,6 @@
+{
+  "behavior": "SUCCEEDS",
+  "screens": {
+    "01_results": "search field: Groc\nresult 1: Groceries"
+  }
+}

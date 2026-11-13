@@ -1,0 +1,41 @@
+{
+  "specId": "share-note",
+  "specHash": "501084bcad992c30",
+  "appId": "com.example.notes",
+  "steps": [
+    {
+      "type": "launch",
+      "clearState": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Groceries"
+      }
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "action_share"
+      }
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Copy link"
+      }
+    },
+    {
+      "type": "screenshot",
+      "name": "01_shared"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "01_shared",
+      "criterionIds": [
+        "link-created"
+      ]
+    }
+  ]
+}

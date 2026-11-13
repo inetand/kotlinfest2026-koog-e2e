@@ -1,0 +1,32 @@
+{
+  "specId": "sync-notes",
+  "specHash": "71262d42e0226a17",
+  "appId": "com.example.notes",
+  "steps": [
+    {
+      "type": "launch",
+      "clearState": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "action_sync"
+      }
+    },
+    {
+      "type": "waitForAnimation"
+    },
+    {
+      "type": "screenshot",
+      "name": "01_synced"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "01_synced",
+      "criterionIds": [
+        "sync-done"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "behavior": "SUCCEEDS",
+  "screens": {
+    "01_archive": "archive\nitem 1: Groceries"
+  }
+}

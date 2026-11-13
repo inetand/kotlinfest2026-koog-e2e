@@ -1,0 +1,6 @@
+{
+  "behavior": "SUCCEEDS",
+  "screens": {
+    "01_shared": "share sheet\nerror: Could not create a link"
+  }
+}
