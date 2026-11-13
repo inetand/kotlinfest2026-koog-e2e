@@ -1,0 +1,24 @@
+spring:
+  main:
+    banner-mode: off
+logging:
+  level:
+    root: warn
+
+# Every value can be overridden by an environment variable, e.g. HARNESS_DEVICES=a,b HARNESS_MODEL_PERMITS=1 ./harness run
+harness:
+  root: workspace           # specs/, flows/, fake-device/ are read from here; results/ is written here
+  app-id: com.example.notes # the application under test
+  backend: fake             # fake | maestro
+  devices: kiosk-1,kiosk-2,kiosk-3 # one worker each; device serials for maestro
+  max-attempts: 3           # attempts per test, the first one included
+  attempt-timeout: 5m       # all attempts of one test together
+  model-permits: 2          # how many judge calls may be in flight at once
+  judge: rule               # rule | llm
+  llm:                      # an OpenAI-compatible server; used only when judge is llm
+    base-url: http://localhost:11434
+    model: gemma3
+    api-key: ""
+  fake:
+    step-latency: 120ms     # how long a fake device takes per step
+    judge-latency: 600ms    # how long the rule judge takes (stands in for an LLM call)
