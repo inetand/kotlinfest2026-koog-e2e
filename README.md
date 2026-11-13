@@ -1,28 +1,27 @@
 # kotlinfest2026-koog-e2e
 
-A minimal, runnable study of how an end-to-end test harness can be composed from **typed Koog graphs**, **Spring Boot dependency injection**, a **`DeviceDriver` abstraction**, and **structured concurrency with Kotlin Coroutines**.
+A compact, runnable end-to-end test harness built from **typed Koog graphs**, **Spring Boot dependency injection**, a **`DeviceDriver` abstraction**, and **structured concurrency with Kotlin Coroutines**. It replays stored scenarios on devices, judges the captured evidence, retries within a budget, and leaves a record and a report for every test.
 
 > [!IMPORTANT]
-> **Disclaimer.** This is a deliberately simplified, educational project. It exists to convey design ideas, not to serve as a production harness. Real devices and LLM calls are replaced by deterministic fakes, and everything that is not needed to explain the design has been removed. It accompanies a KotlinFest 2026 talk and is not a product.
+> **Disclaimer.** This is a deliberately simplified, educational project. It exists to convey design ideas, not to serve as a production harness. It runs out of the box against an in-memory fake device and a rule-based judge; the adapters for a real device (Maestro) and a real model (any OpenAI-compatible server) are included as starting points, not as supported integrations. It accompanies a KotlinFest 2026 talk and is not a product.
 
 ## Abstract
 
-An end-to-end test on a device is slow, occasionally flaky, and often judged by a shared, rate-limited service such as an LLM. This sample isolates the four design decisions that keep such a harness understandable:
+An end-to-end test on a device is slow, occasionally flaky, and often judged by a shared, rate-limited service such as an LLM. Letting a model drive the whole test makes every run different. This sample shows the alternative: the model is confined to one narrow task, and code holds everything else.
 
-1. **A typed retry loop as a subgraph.** Execute → verify → decide is one Koog subgraph. The attempt budget is plain data on its edges, not hidden state.
-2. **A device seam.** The graph speaks to one interface, `DeviceDriver`. A scripted fake makes every failure mode reproducible.
-3. **Two kinds of test.** Graph *topology* is asserted without running a scenario; graph *behavior* is asserted by running the real graph on the fake.
-4. **Bounded shared work, unbounded device work.** One worker per device drains a queue; only the shared verifier is throttled by a semaphore.
+1. **Operations are stored, and code replays them.** A scenario is a JSON file of generic steps. A replay involves no model.
+2. **Answers are typed, and code decides what counts.** The judge returns a structure; a ruling that cites no captured evidence is not accepted.
+3. **Loops are bounded by data.** The retry loop is a Koog subgraph whose budget and deadline travel on its edges as an immutable value.
+4. **Devices run in parallel; only the shared call is throttled.** One worker per device drains a queue; a semaphore limits judge calls.
 
-## Scope
+## What runs today
 
-| In scope | Out of scope (removed on purpose) |
-|---|---|
-| Spring Boot as a CLI composition root | Real devices and any device automation backend |
-| Koog typed strategy graph and subgraph | Real LLM calls, API keys, structured output |
-| `DeviceDriver` with one fake implementation | Specification parsing, scenario generation |
-| Koog graph-testing feature, behavior tests | UI-tree handling, element location, self-repair |
-| `Channel`, `channelFlow`, `Semaphore`, `delay` | Persistence, reports, dashboards, tracing |
+| Part | Out of the box | Included adapter | State of the adapter |
+|---|---|---|---|
+| Device | `FakeDeviceDriver`, in memory | `MaestroDriver` | Unit-tested for the flow it writes; **not exercised against a device** |
+| Judge | `RuleJudge`, a fixed text rule | `LlmJudge` over Koog's OpenAI client | Exercised against a local stub of an OpenAI-compatible server; **not against a real model** |
+
+Out of scope on purpose: scenario generation, element re-location and self-repair, UI-tree digestion, screenshots as model input, account management, dashboards, tracing, persistence of graph state.
 
 ## Requirements
 
@@ -34,10 +33,10 @@ Versions: Kotlin 2.3.21, Spring Boot 3.5.6, Koog 1.1.1, kotlinx-coroutines 1.11.
 ## Quick start
 
 ```sh
-./harness doctor     # check the environment and the wiring
-./harness list       # scenarios and fake devices
-./harness run        # run every scenario across three fake devices
-./gradlew test       # structure, behavior and concurrency tests
+./harness doctor     # check the environment, the workspace, the devices and the judge
+./harness list       # specifications and whether each has a replayable scenario
+./harness run        # run every specification across three fake devices
+./gradlew test       # structure, behavior, evidence-rule and concurrency tests
 ```
 
 `./harness` builds the jar on first use and then runs it. Without the script: `./gradlew bootJar && java -jar build/libs/harness.jar run`.
@@ -46,226 +45,328 @@ Versions: Kotlin 2.3.21, Spring Boot 3.5.6, Koog 1.1.1, kotlinx-coroutines 1.11.
 
 | Command | Purpose |
 |---|---|
-| `run [-s ID]... [--max-attempts N]` | Run scenarios across the fake devices. Exit code 0 if all passed, 1 otherwise. |
-| `list` | List the scenarios, how the fake device answers each, and the devices. |
+| `run [TEST]...` | Run tests across the devices. Progress goes to stderr; stdout carries one JSON line per test. |
+| `list` | List specifications, their content hash, and the state of their scenario. |
 | `graph` | Print the test graph as Mermaid, generated by Koog from the real strategy. |
-| `doctor` | Check the JDK, the configuration, each device, and one probe test end to end. |
+| `doctor` | Check the JDK, the workspace, each device, and the judge. |
 | `help [COMMAND]` | Show usage. `--help` works on every command. |
 
-Sizing is configuration, read by Spring Boot from [`application.yml`](src/main/resources/application.yml) or the environment:
+The exit code of `run` is its worst test: `0` all passed, `1` failed, `2` inconclusive, `3` review required, `4` not run, `64` unknown test.
 
-```sh
-HARNESS_DEVICES=5 HARNESS_VERIFIER_PERMITS=1 ./harness run
-```
+### Configuration
+
+Read by Spring Boot from [`application.yml`](src/main/resources/application.yml) or the environment, and bound to [`HarnessProperties`](src/main/kotlin/harness/config/HarnessProperties.kt).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HARNESS_DEVICES` | 3 | Fake devices, one worker each |
-| `HARNESS_VERIFIER_PERMITS` | 2 | Shared verifications in flight at once |
-| `HARNESS_MAX_ATTEMPTS` | 3 | Attempts per test, the first included |
-| `HARNESS_DEVICE_LATENCY` | 300ms | How long a fake device takes to act |
-| `HARNESS_VERIFIER_LATENCY` | 500ms | How long the shared verifier takes |
+| `HARNESS_ROOT` | `workspace` | Where `specs/`, `flows/`, `fake-device/` are read and `results/` is written |
+| `HARNESS_APP_ID` | `com.example.notes` | The application under test |
+| `HARNESS_BACKEND` | `fake` | `fake` or `maestro` |
+| `HARNESS_DEVICES` | `kiosk-1,kiosk-2,kiosk-3` | One worker each; device serials for Maestro |
+| `HARNESS_MAX_ATTEMPTS` | `3` | Attempts per test, the first included |
+| `HARNESS_ATTEMPT_TIMEOUT` | `5m` | All attempts of one test together |
+| `HARNESS_MODEL_PERMITS` | `2` | Judge calls in flight at once |
+| `HARNESS_JUDGE` | `rule` | `rule` or `llm` |
+| `HARNESS_LLM_BASE_URL`, `HARNESS_LLM_MODEL`, `HARNESS_LLM_API_KEY` | Ollama's address, `gemma3`, empty | The OpenAI-compatible server for the LLM judge |
+
+## The workspace
+
+A test is three files, kept apart because they change for different reasons.
+
+**The specification**, [`workspace/specs/create-note.md`](workspace/specs/create-note.md) — what a human wants, never steps:
+
+```markdown
+# Create a note
+
+## Goal
+The user writes a new note and saves it.
+
+## Criteria
+- note-saved: After saving, the editor confirms with "Note saved".
+- title-kept: The saved note shows the title "Groceries".
+```
+
+**The scenario**, [`workspace/flows/create-note.json`](workspace/flows/create-note.json) — how it is proven, as generic steps and the checkpoints that give evidence for each criterion:
+
+```json
+{
+  "specId": "create-note",
+  "specHash": "f1fb7836ad55970d",
+  "appId": "com.example.notes",
+  "steps": [
+    { "type": "launch", "clearState": true },
+    { "type": "tap", "target": { "id": "fab_add_note" } },
+    { "type": "inputText", "text": "Groceries" },
+    { "type": "tap", "target": { "text": "Save" } },
+    { "type": "waitForAnimation" },
+    { "type": "screenshot", "name": "01_saved" }
+  ],
+  "checkpoints": [{ "name": "01_saved", "criterionIds": ["note-saved", "title-kept"] }]
+}
+```
+
+Steps address elements by id or label, never by coordinates. `specHash` is the digest of the specification text: edit the specification and the scenario becomes stale, which the harness reports instead of replaying it.
+
+**The fake app**, [`workspace/fake-device/create-note.json`](workspace/fake-device/create-note.json) — only for the fake backend: how the replay behaves and what each checkpoint's screen shows.
+
+The seven bundled specifications cover every outcome:
+
+| Test | What happens | Outcome |
+|---|---|---|
+| `create-note`, `search-note` | Replay completes, evidence proves every criterion | `PASS` |
+| `sync-notes` | First replay fails, the second passes | `PASS_WITH_WARNINGS` |
+| `share-note` | Replay completes, the screen contradicts the criterion | `FAIL` |
+| `delete-note` | Every replay fails | `INCONCLUSIVE` |
+| `archive-note` | The scenario's hash no longer matches the specification | `REVIEW_REQUIRED` |
+| `export-note` | No scenario is stored | `NOT_RUN` |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    CLI["CLI commands<br/>(picocli)"] --> Pool["TestPool<br/>queue + one worker per device"]
-    Pool --> Runner["TestRunner<br/>one graph run per test"]
+    CLI["CLI<br/>(picocli)"] --> Pool["TestPool<br/>queue + one worker per device"]
+    Pool --> Runner["SpecificationRunner<br/>one graph run per test"]
     Runner --> Graph["TestGraph<br/>Koog strategy"]
+    Graph --> Resolve["ResolveNode"]
     Graph --> Execute["ExecuteNode"]
-    Graph --> Verify["VerifyNode"]
-    Graph --> Decide["DecideNode"]
+    Graph --> Validate["ValidateNode"]
+    Graph --> Retry["RetryNode"]
+    Graph --> Report["ReportNode"]
+    Resolve --> Files[("specs/ flows/")]
     Execute --> Driver["DeviceDriver"]
-    Driver -.implemented by.-> Fake["FakeDeviceDriver"]
-    Verify --> Verifier["SharedVerifier<br/>Semaphore"]
-    Spring["Spring Boot<br/>constructor injection"] -.assembles.-> CLI
-    Spring -.assembles.-> Pool
-    Spring -.assembles.-> Graph
+    Driver -.-> Fake["FakeDeviceDriver"]
+    Driver -.-> Maestro["MaestroDriver"]
+    Validate --> Validator["AttemptValidator<br/>evidence rules"]
+    Validator --> Judge["CriterionJudge"]
+    Judge -.-> Rule["RuleJudge"]
+    Judge -.-> Llm["LlmJudge"]
+    Rule --> Permits{{"ModelPermits<br/>Semaphore"}}
+    Llm --> Permits
+    Retry --> Policy["AttemptPolicy"]
+    Report --> Results[("results/")]
 ```
 
 | Box | Code |
 |---|---|
-| CLI commands | [`cli/`](src/main/kotlin/harness/cli) |
-| TestPool | [`pool/TestPool.kt`](src/main/kotlin/harness/pool/TestPool.kt) |
-| TestRunner, agent creation | [`graph/TestRunner.kt`](src/main/kotlin/harness/graph/TestRunner.kt), [`graph/AgentFactory.kt`](src/main/kotlin/harness/graph/AgentFactory.kt) |
-| TestGraph | [`graph/TestGraph.kt`](src/main/kotlin/harness/graph/TestGraph.kt) |
+| CLI | [`cli/`](src/main/kotlin/harness/cli) |
+| TestPool, result lines | [`pool/TestPool.kt`](src/main/kotlin/harness/pool/TestPool.kt), [`pool/ResultLine.kt`](src/main/kotlin/harness/pool/ResultLine.kt) |
+| SpecificationRunner, agent creation | [`graph/SpecificationRunner.kt`](src/main/kotlin/harness/graph/SpecificationRunner.kt), [`graph/AgentFactory.kt`](src/main/kotlin/harness/graph/AgentFactory.kt) |
+| TestGraph, AttemptSubgraph | [`graph/TestGraph.kt`](src/main/kotlin/harness/graph/TestGraph.kt), [`graph/AttemptSubgraph.kt`](src/main/kotlin/harness/graph/AttemptSubgraph.kt) |
 | Nodes | [`graph/node/`](src/main/kotlin/harness/graph/node) |
-| DeviceDriver, FakeDeviceDriver | [`device/DeviceDriver.kt`](src/main/kotlin/harness/device/DeviceDriver.kt), [`device/FakeDeviceDriver.kt`](src/main/kotlin/harness/device/FakeDeviceDriver.kt) |
-| SharedVerifier | [`verify/SharedVerifier.kt`](src/main/kotlin/harness/verify/SharedVerifier.kt) |
-| Spring wiring | [`HarnessConfiguration.kt`](src/main/kotlin/harness/HarnessConfiguration.kt), [`HarnessProperties.kt`](src/main/kotlin/harness/HarnessProperties.kt) |
+| Specifications, scenarios | [`spec/`](src/main/kotlin/harness/spec), [`scenario/`](src/main/kotlin/harness/scenario) |
+| DeviceDriver and its two implementations | [`device/DeviceDriver.kt`](src/main/kotlin/harness/device/DeviceDriver.kt), [`device/fake/`](src/main/kotlin/harness/device/fake), [`device/maestro/`](src/main/kotlin/harness/device/maestro) |
+| AttemptValidator, AttemptPolicy, outcome rules | [`run/AttemptValidator.kt`](src/main/kotlin/harness/run/AttemptValidator.kt), [`run/AttemptPolicy.kt`](src/main/kotlin/harness/run/AttemptPolicy.kt), [`run/OutcomeRules.kt`](src/main/kotlin/harness/run/OutcomeRules.kt) |
+| CriterionJudge and its two implementations, ModelPermits | [`judge/`](src/main/kotlin/harness/judge) |
+| Spring wiring | [`config/HarnessConfiguration.kt`](src/main/kotlin/harness/config/HarnessConfiguration.kt) |
 
 ### Division of responsibility
 
 | Layer | Responsible for | Not responsible for |
 |---|---|---|
-| **Spring Boot** | Building the object graph by constructor injection; binding typed configuration; process start and exit code | Control flow of a test; concurrency |
-| **Koog** | The typed graph: nodes, edges, conditions, the subgraph boundary; executing one run; graph assertions in tests | What a node does; how many runs happen at once |
-| **Coroutines** | Distributing tests to workers, collecting results, limiting the shared call, cancellation | The steps inside a test |
-| **Sample code** | Node bodies, the retry rule, the device seam, the fakes, the CLI | — |
+| **Spring Boot** | Building the object graph by constructor injection; choosing the device backend and the judge from configuration; process start and exit code | Control flow of a test; concurrency |
+| **Koog** | The typed graph: nodes, edges, conditions, the subgraph boundary; executing one run; structured output and its repair; graph assertions in tests | What a node does; how many runs happen at once |
+| **Coroutines** | Distributing tests to workers, collecting results, limiting the shared call, timeouts, cancellation | The steps inside a test |
+| **Sample code** | Node bodies, the retry policy, the evidence rules, the device seam, the fakes, the CLI | — |
 
 ## The graph
 
 ```mermaid
 stateDiagram-v2
-    [*] --> attempt : AttemptState.first(request)
+    [*] --> resolve : RunRequest
+    resolve --> attempt : Resolved.Ready → AttemptState
+    resolve --> report : Resolved.Blocked → AttemptOutcome
     state attempt {
         [*] --> execute
-        execute --> verify : Executed
-        verify --> decide : Verified
-        decide --> execute : Decision.Retry → next AttemptState
-        decide --> [*] : Decision.Finish → TestResult
+        execute --> validate : AttemptState
+        validate --> retry : Validated
+        retry --> execute : AttemptDecision.Retry → next AttemptState
+        retry --> [*] : AttemptDecision.Finish → AttemptOutcome
     }
-    attempt --> [*] : TestResult
+    attempt --> report : AttemptOutcome
+    report --> [*] : Reported
 ```
 
 | Element | Code |
 |---|---|
 | Top-level strategy `test-run` | [`graph/TestGraph.kt`](src/main/kotlin/harness/graph/TestGraph.kt) |
-| Subgraph `attempt` and its edges | [`graph/AttemptSubgraph.kt`](src/main/kotlin/harness/graph/AttemptSubgraph.kt) |
-| `execute` | [`graph/node/ExecuteNode.kt`](src/main/kotlin/harness/graph/node/ExecuteNode.kt) |
-| `verify` | [`graph/node/VerifyNode.kt`](src/main/kotlin/harness/graph/node/VerifyNode.kt) |
-| `decide` | [`graph/node/DecideNode.kt`](src/main/kotlin/harness/graph/node/DecideNode.kt) |
+| Subgraph `attempt` | [`graph/AttemptSubgraph.kt`](src/main/kotlin/harness/graph/AttemptSubgraph.kt) |
+| `resolve`: may the test touch the device? | [`graph/node/ResolveNode.kt`](src/main/kotlin/harness/graph/node/ResolveNode.kt) |
+| `execute`: replay, with the deadline | [`graph/node/ExecuteNode.kt`](src/main/kotlin/harness/graph/node/ExecuteNode.kt) |
+| `validate`: judge from stored evidence | [`graph/node/ValidateNode.kt`](src/main/kotlin/harness/graph/node/ValidateNode.kt) |
+| `retry`: finish or go again | [`graph/node/RetryNode.kt`](src/main/kotlin/harness/graph/node/RetryNode.kt) |
+| `report`: record and report | [`graph/node/ReportNode.kt`](src/main/kotlin/harness/graph/node/ReportNode.kt) |
 | Inputs, outputs, branches | [`graph/Model.kt`](src/main/kotlin/harness/graph/Model.kt) |
 
-`./harness graph` prints the diagram Koog derives from the same strategy object, so the picture cannot drift from the code.
+`./harness graph` prints the diagram Koog derives from the same strategy object.
 
 ### Why a subgraph
 
-The retry loop is a self-contained protocol: it takes the state of a first attempt and yields a final result. Folding it into one subgraph gives it a typed boundary (`AttemptState` in, `TestResult` out). The top level reads as the outline of a test, and the loop can be asserted on its own.
+The retry loop is a self-contained protocol: it takes a ready attempt and yields a final outcome. Folding it into one subgraph gives it a typed boundary (`AttemptState` in, `AttemptOutcome` out). The top level stays three nodes and reads as the outline of a test, and the loop can be asserted on its own.
 
 ### State is passed, not shared
 
-A subgraph does **not** provide shared mutable state, and this sample does not pretend it does. The attempt number and the remaining budget live in one immutable value:
+A subgraph does **not** provide shared mutable state, and this sample does not pretend it does. Where the loop stands is one immutable value:
 
 ```kotlin
-data class AttemptState(val request: RunRequest, val attempt: Int, val remaining: Int)
+data class AttemptState(
+    val context: RunContext,
+    val scenario: Scenario,
+    val attemptNumber: Int,
+    val retriesRemaining: Int,
+    val previousAttempts: List<AttemptRecord> = emptyList(),
+    val currentEvidence: ExecutionResult? = null,
+    val deadline: Instant,
+    …
+)
 ```
 
-Each node receives it in its input and returns it in its output (`Executed`, `Verified`). On a retry, `decide` emits `Decision.Retry(state.next())`, and the `Retry` edge transforms that into the next input of `execute`. There is no counter in a field, in the subgraph, or in the agent. Graph definition and node bodies are separate classes: [`AttemptSubgraph`](src/main/kotlin/harness/graph/AttemptSubgraph.kt) only wires, and each node is a plain class with constructor-injected collaborators ([`GraphNode`](src/main/kotlin/harness/graph/GraphNode.kt)).
+`resolve` creates it. `execute` returns a copy carrying the evidence. `validate` returns a copy with the judged attempt appended. On a retry, `retry` returns `state.copy(attemptNumber + 1, retriesRemaining - 1)` inside `AttemptDecision.Retry`, and the `Retry` edge hands that value back to `execute`. There is no counter in a field, in the subgraph, or in the agent, and no conversation history. Because each pass decreases the budget and the deadline never moves, the loop always ends.
 
-## Worked examples
+Node bodies are ordinary classes that know nothing of Koog ([`GraphNode`](src/main/kotlin/harness/graph/GraphNode.kt)); they meet Koog in one place, `asNode()`.
 
-**Nominal termination** — the device succeeds on the first attempt.
+## Code decides what counts
+
+The judge's answer is a claim. [`AttemptValidator`](src/main/kotlin/harness/run/AttemptValidator.kt) turns it into a verdict in four phases:
+
+1. **Evidence check.** Nothing captured, or a file that no longer matches its digest: the judge is not asked.
+2. **Ask the judge**, giving it only stored evidence, never the live device.
+3. **Shape check.** A duplicate or unknown criterion id is a harness fault, not a verdict.
+4. **Evidence rules.** A `PASS` or `FAIL` that cites no captured checkpoint becomes `INCONCLUSIVE`; a criterion the judge skipped is not verified.
+
+Then [`OutcomeRules`](src/main/kotlin/harness/run/OutcomeRules.kt) aggregates and [`AttemptPolicy`](src/main/kotlin/harness/run/AttemptPolicy.kt) decides what follows: a pass or a fail is final (evidence decided it), a harness fault is final, and only a transient failure is retried.
+
+These rules hold whichever judge is plugged in. With the LLM judge, Koog requests the answer as a typed structure ([`JudgedRun`](src/main/kotlin/harness/judge/LlmJudge.kt)) and repairs a malformed one a bounded number of times.
+
+## Worked example
 
 ```text
-$ ./harness run -s open-settings
-   279ms  kiosk-1  act       open-settings (attempt 1)
-   587ms  kiosk-1  screen    open-settings -> "done: open settings"
-   589ms  kiosk-1  verify >  open-settings [1/2 permits in use]
-  1097ms  kiosk-1  verify <  open-settings pass
-  1106ms  kiosk-1  RESULT    open-settings PASSED after 1 attempt(s)
+$ ./harness run create-note sync-notes share-note
+   365ms  kiosk-1   create-note    replay >  attempt 1/3
+   369ms  kiosk-2   sync-notes     replay >  attempt 1/3
+   369ms  kiosk-3   share-note     replay >  attempt 1/3
+   630ms  kiosk-2   sync-notes     replay <  step 2 failed: the device was busy
+   634ms  kiosk-2   sync-notes     retry     step 2 failed: the device was busy
+   636ms  kiosk-2   sync-notes     replay >  attempt 2/3
+   996ms  kiosk-3   share-note     evidence  01_shared
+   998ms  kiosk-3   share-note     judge >   1/2 permits in use
+  1128ms  kiosk-2   sync-notes     judge >   2/2 permits in use
+  1605ms  kiosk-3   share-note     judge <   FAIL
+  1617ms  kiosk-1   create-note    judge >   2/2 permits in use
+  1621ms  kiosk-3   share-note     RESULT    FAIL after 1 attempt(s)
+  1736ms  kiosk-2   sync-notes     RESULT    PASS_WITH_WARNINGS after 2 attempt(s)
+  2220ms  kiosk-1   create-note    RESULT    PASS after 1 attempt(s)
 ```
 
-**Recovery by retry** — the device fails once, then succeeds.
+(Abridged; timings vary by a few milliseconds.) Three things are visible: all three devices replay at once; `create-note` finishes its replay at about 1126 ms but waits until 1617 ms for a judge permit; and `share-note` fails after one attempt without a retry, because evidence contradicted the criterion.
 
-```text
-$ ./harness run -s sync-inbox
-   339ms  kiosk-1  act       sync-inbox (attempt 1)
-   655ms  kiosk-1  screen    sync-inbox -> "busy"
-  1160ms  kiosk-1  verify <  sync-inbox fail
-  1161ms  kiosk-1  act       sync-inbox (attempt 2)
-  1466ms  kiosk-1  screen    sync-inbox -> "done: sync inbox"
-  1971ms  kiosk-1  verify <  sync-inbox pass
-  1984ms  kiosk-1  RESULT    sync-inbox PASSED after 2 attempt(s)
+Stdout carries one line per test:
+
+```json
+{"testId":"share-note","outcome":"FAIL","exitCode":1,"device":"kiosk-3","attempts":1,"reason":"criterion link-created: the screen does not show \"Link copied\"","record":"workspace/results/…/share-note/record.json","report":"workspace/results/…/share-note/report.md"}
 ```
 
-**Budget exhaustion** — the device keeps failing; the loop stops at the limit and the process exits with 1.
-
-```text
-$ ./harness run -s print-receipt
-   279ms  kiosk-1  act       print-receipt (attempt 1)
-  1101ms  kiosk-1  act       print-receipt (attempt 2)
-  1913ms  kiosk-1  act       print-receipt (attempt 3)
-  2720ms  kiosk-1  verify <  print-receipt fail
-  2724ms  kiosk-1  RESULT    print-receipt EXHAUSTED after 3 attempt(s)
-```
-
-(Outputs are abridged; timings vary by a few milliseconds.)
+Each test leaves `record.json` (the full typed record), `report.md` (a readable summary with each criterion's ruling and evidence), and one directory per attempt with the device log and the captured evidence.
 
 ## The device seam
 
-[`DeviceDriver`](src/main/kotlin/harness/device/DeviceDriver.kt) is the only thing the graph knows about a device: a name, a readiness check, and `perform(action)`. [`FakeDeviceDriver`](src/main/kotlin/harness/device/FakeDeviceDriver.kt) is its single implementation and answers by a script with three deterministic behaviors: `Succeeds`, `FailsOnce`, `AlwaysFails`.
+[`DeviceDriver`](src/main/kotlin/harness/device/DeviceDriver.kt) is the only thing the graph knows about a device: readiness, and `execute(scenario, attemptDir, listener)` returning an `ExecutionResult`. A failed step is data in that result, not an exception, so the attempt loop can route on it.
 
-What the fake lets you verify:
+Each backend translates the sealed [`FlowStep`](src/main/kotlin/harness/scenario/FlowStep.kt) with a `when` that has no `else`. [`MaestroStepWriter`](src/main/kotlin/harness/device/maestro/MaestroStepWriter.kt) is the example: add a step type and forget it there, and the build fails.
 
-- the retry rule and the attempt budget, including the exact number of device calls;
-- every branch of the graph, on demand and in milliseconds;
-- the scheduling of workers and the limit on the shared verifier.
-
-What it cannot tell you: anything about a real device — timing, flakiness, screen content, or driver faults.
+What the fake lets you verify: every branch of the graph, the retry policy and its exact number of replays, the evidence rules, and the scheduling of workers — in milliseconds, on every merge request. What it cannot tell you: anything about a real device.
 
 ## Testing: structure versus behavior
 
 | | Structure | Behavior |
 |---|---|---|
-| Question | Is the graph wired as designed? | Does a run produce the right result? |
-| Method | Koog's testing feature (`testGraph`, `assertEdges`, `assertReachable`) | Execute the real graph on `FakeDeviceDriver` |
+| Question | Is the graph wired as designed? | Does a run produce the right outcome? |
+| Method | Koog's testing feature (`testGraph`, `assertNodeByName`, `assertEdges`, `assertReachable`) | Execute the real graph on `FakeDeviceDriver` and `RuleJudge` |
 | Runs node bodies | No | Yes |
-| Catches | A missing node, a wrong edge, a condition that routes to the wrong node | A wrong retry rule, an off-by-one in the budget, a wrong result |
+| Catches | A missing node, a wrong input or output type, an edge to the wrong node | A wrong policy, an off-by-one in the budget, a missing record |
 | Test | [`GraphStructureTest`](src/test/kotlin/harness/GraphStructureTest.kt) | [`GraphBehaviorTest`](src/test/kotlin/harness/GraphBehaviorTest.kt) |
 
-The structure test asserts that `attempt` is a subgraph between start and finish, that `execute → verify → decide` is an unconditional chain, and that `decide` routes a `Decision.Retry` to `execute` and a `Decision.Finish` to the subgraph's finish. Koog evaluates these against the graph when the agent starts. The two are complementary: a correctly wired graph can still decide wrongly, and a correct rule is useless if no edge leads to it.
+The two are complementary: a correctly wired graph can still decide wrongly, and a correct rule is useless if no edge leads to it. Types are checked by the compiler, but an edge condition is evaluated at run time, so "every branch leads somewhere" needs the structure test.
 
-Two further tests complete the safety net: [`DecideNodeTest`](src/test/kotlin/harness/DecideNodeTest.kt) exercises the retry rule as a plain class, and [`TestPoolTest`](src/test/kotlin/harness/TestPoolTest.kt) covers concurrency. [`ApplicationWiringTest`](src/test/kotlin/harness/ApplicationWiringTest.kt) starts the Spring context.
+The rest of the safety net:
 
-> Koog 1.1.1 also offers node-output assertions (`assertNodes`). They require a mocked agent context, so this sample tests node bodies as plain classes instead.
+| Test | Subject |
+|---|---|
+| [`AttemptValidatorTest`](src/test/kotlin/harness/AttemptValidatorTest.kt) | The evidence rules, against a judge stub that answers as a model might |
+| [`AttemptPolicyTest`](src/test/kotlin/harness/AttemptPolicyTest.kt) | Each branch of the retry policy, as a plain class |
+| [`TestPoolTest`](src/test/kotlin/harness/TestPoolTest.kt) | Overlap, the permit limit, failure isolation, cancellation |
+| [`MaestroTest`](src/test/kotlin/harness/MaestroTest.kt) | The flow the driver writes; process timeout and cancellation |
+| [`SpecificationParserTest`](src/test/kotlin/harness/SpecificationParserTest.kt), [`ApplicationWiringTest`](src/test/kotlin/harness/ApplicationWiringTest.kt) | The specification format; the Spring context |
+
+[`Wiring`](src/test/kotlin/harness/Wiring.kt) builds the production object graph by hand with plain constructors, which is what constructor injection buys in tests.
 
 ## Concurrency model
 
 ```mermaid
 flowchart LR
-    Q[("Channel&lt;Scenario&gt;<br/>waiting tests")] --> W1["worker kiosk-1"]
+    Q[("produce<br/>waiting tests")] --> W1["worker kiosk-1"]
     Q --> W2["worker kiosk-2"]
     Q --> W3["worker kiosk-3"]
-    W1 --> S{{"Semaphore<br/>2 permits"}}
+    W1 --> S{{"ModelPermits<br/>Semaphore, 2 permits"}}
     W2 --> S
     W3 --> S
-    S --> V["SharedVerifier"]
-    W1 --> R[("channelFlow<br/>results")]
+    S --> J["judge call"]
+    W1 --> R[("channelFlow<br/>result lines")]
     W2 --> R
     W3 --> R
 ```
 
-- **Queue.** The waiting tests are one `Channel`. Workers take the next test when they are free, so a slow test never blocks another device.
-- **Workers.** One coroutine per device, launched inside `channelFlow`. A device therefore runs one test at a time, and each test is an independent graph run with a fresh Koog agent.
-- **Semaphore.** Only [`SharedVerifier`](src/main/kotlin/harness/verify/SharedVerifier.kt) is throttled. It is the stand-in for the **shared LLM call** discussed in the talk: one service, used by every device, with a concurrency limit. Device work is never held back by it.
-- **`delay`, not `sleep`.** Fakes wait without blocking a thread, which is why three devices overlap on a single thread.
-- **Structured concurrency.** Workers are children of the collector's scope. The flow completes when all workers finish, a failure in one cancels the rest, and cancelling the collector cancels them all. No global scope is used and no `CancellationException` is caught.
-
-The overlap is visible in the console. Below, all three devices act at once, two verifications hold both permits, and `kiosk-3` waits for a permit until `1125ms`:
-
 ```text
-$ ./harness run
-   286ms  kiosk-1  act       open-settings (attempt 1)
-   296ms  kiosk-2  act       search-catalog (attempt 1)
-   296ms  kiosk-3  act       sync-inbox (attempt 1)
-   605ms  kiosk-1  verify >  open-settings [1/2 permits in use]
-   607ms  kiosk-2  verify >  search-catalog [2/2 permits in use]
-   607ms  kiosk-3  screen    sync-inbox -> "busy"
-  1111ms  kiosk-1  verify <  open-settings pass
-  1123ms  kiosk-1  act       upload-photo (attempt 1)
-  1125ms  kiosk-3  verify >  sync-inbox [1/2 permits in use]
+runBlocking                 // CLI
+└─ channelFlow              // results as one Flow
+   ├─ produce               // the queue
+   ├─ launch                // worker of kiosk-1
+   │  └─ withTimeoutOrNull  // the test's deadline, around the replay
+   └─ launch                // worker of kiosk-2
 ```
+
+- **Queue.** The waiting tests are one channel ([`TestPool`](src/main/kotlin/harness/pool/TestPool.kt)). A worker takes the next test when it is free, so a slow test never blocks another device.
+- **Workers.** One coroutine per device. A worker owns its device, so devices need no lock, and each test is an independent graph run with a fresh Koog agent.
+- **Semaphore.** Only the judge call goes through [`ModelPermits`](src/main/kotlin/harness/judge/ModelPermits.kt). It limits how many calls are in flight, not requests per minute.
+- **Timeouts.** The deadline in `AttemptState` becomes a `withTimeoutOrNull` around the replay. [`ProcessRunner`](src/main/kotlin/harness/device/maestro/ProcessRunner.kt) waits for an external tool under `runInterruptible`, so the same cancellation reaches a `maestro` process.
+- **Structured concurrency.** The queue and the workers are children of the collector's scope. Cancelling the collector cancels them all, down to a replay in flight. No global scope is used and no `CancellationException` is swallowed.
+- **Failure isolation.** A fault inside one graph run is caught by [`SpecificationRunner`](src/main/kotlin/harness/graph/SpecificationRunner.kt), recorded as `INCONCLUSIVE` for that test, and does not reach the others.
+
+## Going beyond the fakes
+
+**A real model.** Any OpenAI-compatible server works, for example a local Ollama:
+
+```sh
+HARNESS_JUDGE=llm HARNESS_LLM_MODEL=<model> ./harness doctor
+HARNESS_JUDGE=llm HARNESS_LLM_MODEL=<model> ./harness run create-note
+```
+
+The judge reads hierarchy text only; screenshots are not sent. Nodes and rules are unchanged: only the `CriterionJudge` bean differs.
+
+**A real device.** Point the harness at an app and a device Maestro can see, and write specifications and scenarios for that app:
+
+```sh
+HARNESS_BACKEND=maestro HARNESS_DEVICES=<serial> HARNESS_APP_ID=<app id> HARNESS_ROOT=<your workspace> ./harness doctor
+```
+
+Expect to adjust [`MaestroDriver`](src/main/kotlin/harness/device/maestro/MaestroDriver.kt): it has not been run against a device in this sample, and its failure parsing is a first approximation.
 
 ## Differences from the talk
 
 | In the talk | In this sample |
 |---|---|
-| Real devices behind a driver | `FakeDeviceDriver`, scripted and in memory |
-| A shared LLM call judging the result | `SharedVerifier`, a fixed string comparison with an artificial latency |
-| A larger graph with recovery paths | One subgraph: execute → verify → decide |
-| Reports, tracing, a dashboard | Console output only |
-
-A Koog agent requires a `PromptExecutor` even when no node calls a model. [`NoLlmPromptExecutor`](src/main/kotlin/harness/graph/NoLlmPromptExecutor.kt) is a placeholder that throws if it is ever called; it is not an LLM integration.
+| Scenarios are generated by a model exploring the app | Scenarios are written by hand |
+| A missing element triggers a bounded model-driven recovery (`locate → patch`) | No recovery; a failed step is retried unchanged, then inconclusive |
+| Maestro and Appium drivers, used daily | A fake driver, plus a minimal Maestro driver that is untested on devices |
+| A model judges screenshots and digested hierarchies | A rule judge, plus an LLM judge reading hierarchy text only |
+| Reports, a dashboard, tracing | A JSON record and a Markdown report per test |
 
 ## Limitations
 
 This sample makes no claim about:
 
-- behavior on real devices, or correctness of any real driver;
-- quality, cost, latency or rate limits of a real LLM;
+- behavior on real devices, or correctness of the Maestro driver;
+- quality, cost, latency or rate limits of a real model, or the quality of the judge prompt;
 - fairness or ordering of test distribution beyond "each test runs once";
-- isolation of a failure: an unexpected exception in one run cancels the whole pool rather than being recorded as a result;
-- durability: nothing is persisted, and an interrupted run leaves no record;
+- secrets: nothing redacts what a model or a device log writes into records;
+- durability: an interrupted run leaves no record for the tests in flight;
 - suitability for production use of any kind.
